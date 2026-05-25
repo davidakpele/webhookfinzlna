@@ -13,12 +13,12 @@ public class TransactionRepository(IConfiguration config) : ITransactionReposito
     {
         const string sql = """
             INSERT INTO transactions
-                (id, external_ref, account_id, amount, currency, type, status,
-                 transacted_at, received_at, metadata)
+                ("Id", "ExternalRef", "AccountId", "Amount", "Currency", "Type", "Status",
+                 "TransactedAt", "ReceivedAt", "Metadata")
             VALUES
                 (@Id, @ExternalRef, @AccountId, @Amount, @Currency, @Type, @Status,
                  @TransactedAt, @ReceivedAt, @Metadata::jsonb)
-            ON CONFLICT (external_ref) DO NOTHING
+            ON CONFLICT ("ExternalRef") DO NOTHING
             RETURNING *;
             """;
 
@@ -30,35 +30,48 @@ public class TransactionRepository(IConfiguration config) : ITransactionReposito
         if (inserted is not null)
             return (inserted, false);
 
-        // Duplicate — fetch the existing row so the caller can return it
+        // Duplicate — return the existing row
         var existing = await conn.QuerySingleAsync<Transaction>(
-            "SELECT * FROM transactions WHERE external_ref = @ExternalRef",
+            """SELECT * FROM transactions WHERE "ExternalRef" = @ExternalRef""",
             new { txn.ExternalRef });
 
         return (existing, true);
     }
 
+    public async Task<Transaction?> GetPendingTransactionAsync(string accountId)
+    {
+        await using var conn = CreateConnection();
+        await conn.OpenAsync();
+        return await conn.QuerySingleOrDefaultAsync<Transaction>(
+            """
+            SELECT * FROM transactions
+            WHERE "AccountId" = @AccountId
+              AND "Status"    = 'pending'
+            LIMIT 1
+            """,
+            new { AccountId = accountId });
+    }
+
     public async Task RefreshAccountSummaryAsync(string accountId)
     {
-        // Derived computation: aggregate completed transactions → upsert summary
         const string sql = """
             INSERT INTO account_summaries
-                (account_id, total_credits, total_debits, transaction_count, last_updated)
+                ("AccountId", "TotalCredits", "TotalDebits", "TransactionCount", "LastUpdated")
             SELECT
-                account_id,
-                COALESCE(SUM(amount) FILTER (WHERE type = 'credit'), 0) AS total_credits,
-                COALESCE(SUM(amount) FILTER (WHERE type = 'debit'),  0) AS total_debits,
-                COUNT(*)                                                 AS transaction_count,
-                NOW()                                                    AS last_updated
+                "AccountId",
+                COALESCE(SUM("Amount") FILTER (WHERE "Type" = 'credit'), 0),
+                COALESCE(SUM("Amount") FILTER (WHERE "Type" = 'debit'),  0),
+                COUNT(*),
+                NOW()
             FROM transactions
-            WHERE account_id = @AccountId
-              AND status     = 'completed'
-            GROUP BY account_id
-            ON CONFLICT (account_id) DO UPDATE
-                SET total_credits     = EXCLUDED.total_credits,
-                    total_debits      = EXCLUDED.total_debits,
-                    transaction_count = EXCLUDED.transaction_count,
-                    last_updated      = EXCLUDED.last_updated;
+            WHERE "AccountId" = @AccountId
+              AND "Status"    = 'completed'
+            GROUP BY "AccountId"
+            ON CONFLICT ("AccountId") DO UPDATE
+                SET "TotalCredits"     = EXCLUDED."TotalCredits",
+                    "TotalDebits"      = EXCLUDED."TotalDebits",
+                    "TransactionCount" = EXCLUDED."TransactionCount",
+                    "LastUpdated"      = EXCLUDED."LastUpdated";
             """;
 
         await using var conn = CreateConnection();
@@ -71,7 +84,7 @@ public class TransactionRepository(IConfiguration config) : ITransactionReposito
         await using var conn = CreateConnection();
         await conn.OpenAsync();
         return await conn.QuerySingleOrDefaultAsync<AccountSummary>(
-            "SELECT * FROM account_summaries WHERE account_id = @AccountId",
+            """SELECT * FROM account_summaries WHERE "AccountId" = @AccountId""",
             new { AccountId = accountId });
     }
 }

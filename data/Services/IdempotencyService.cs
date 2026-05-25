@@ -3,27 +3,66 @@ using StackExchange.Redis;
 namespace WebhooksAPI.Data.Services;
 
 /// <summary>
-/// Uses Redis SET NX as a fast, distributed idempotency gate.
-/// If Redis is unavailable, the call is treated as a cache miss and the
-/// DB-level ON CONFLICT DO NOTHING acts as the safety net — no request is lost.
+/// Redis-backed idempotency gate with status-aware TTLs:
+///   - pending   → 30 minutes  (covers realistic processing windows)
+///   - completed → 2 seconds   (blocks immediate retries; DB unique constraint handles the rest)
+///
+/// If Redis is unavailable the service degrades gracefully — the PostgreSQL
+/// ON CONFLICT DO NOTHING upsert acts as the permanent safety net.
 /// </summary>
 public class IdempotencyService(IConnectionMultiplexer redis, ILogger<IdempotencyService> logger)
     : IIdempotencyService
 {
-    public async Task<bool> TryAcquireAsync(string key, TimeSpan ttl)
+    // Pending transactions are held for 30 minutes max
+    public static readonly TimeSpan PendingTtl = TimeSpan.FromMinutes(30);
+
+    // Completed keys linger for 2 seconds to absorb immediate retries,
+    // then expire — the DB unique constraint takes over permanently
+    private static readonly TimeSpan CompletedTtl = TimeSpan.FromSeconds(2);
+
+    private static string Key(string externalRef) => $"idempotency:{externalRef}";
+
+    public async Task<bool> TryAcquireAsync(string externalRef, TimeSpan ttl)
     {
         try
         {
             var db = redis.GetDatabase();
-            // SET key "1" NX EX <ttl> — atomic, returns true only on first set
-            return await db.StringSetAsync($"idempotency:{key}", "1", ttl, When.NotExists);
+            return await db.StringSetAsync(Key(externalRef), "1", ttl, When.NotExists);
         }
         catch (RedisException ex)
         {
-            // Redis is down — log and degrade gracefully.
-            // The DB upsert (ON CONFLICT DO NOTHING) will still prevent duplicates.
-            logger.LogWarning(ex, "Redis unavailable for idempotency check on key '{Key}'. Falling through to DB.", key);
-            return true; // treat as "not seen" — DB is the source of truth
+            logger.LogWarning(ex,
+                "Redis unavailable for idempotency check on '{Key}'. Falling through to DB.", externalRef);
+            return true; // treat as unseen — DB is the source of truth
+        }
+    }
+
+    public async Task MarkCompletedAsync(string externalRef)
+    {
+        try
+        {
+            var db = redis.GetDatabase();
+            // Overwrite with a 2-second TTL — blocks instant retries, then self-destructs
+            await db.StringSetAsync(Key(externalRef), "completed", CompletedTtl);
+        }
+        catch (RedisException ex)
+        {
+            logger.LogWarning(ex,
+                "Redis unavailable when marking '{Key}' as completed.", externalRef);
+        }
+    }
+
+    public async Task ReleaseAsync(string externalRef)
+    {
+        try
+        {
+            var db = redis.GetDatabase();
+            await db.KeyDeleteAsync(Key(externalRef));
+        }
+        catch (RedisException ex)
+        {
+            logger.LogWarning(ex,
+                "Redis unavailable when releasing idempotency key '{Key}'.", externalRef);
         }
     }
 }

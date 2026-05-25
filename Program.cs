@@ -1,14 +1,10 @@
 using System.Reflection;
-using Dapper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using StackExchange.Redis;
 using WebhooksAPI.Configurations;
 using WebhooksAPI.Data.Repositories;
 using WebhooksAPI.Data.Services;
-
-// Dapper: map snake_case columns (external_ref) → PascalCase properties (ExternalRef)
-DefaultTypeMap.MatchNamesWithUnderscores = true;
 
 var builder = WebApplication.CreateBuilder(args);
 

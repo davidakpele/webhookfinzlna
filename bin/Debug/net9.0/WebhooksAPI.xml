@@ -13,35 +13,64 @@
         <member name="M:WebhooksAPI.Controllers.WebhooksController.IngestTransaction(WebhooksAPI.Data.DTO.InboundTransactionDto)">
              <summary>Ingest a transaction from an external provider.</summary>
              <remarks>
-             Idempotent — re-submitting the same <c>ExternalRef</c> returns the original record
-             with <c>wasDuplicate: true</c> and HTTP 200 instead of 201.
+             **Idempotency:** Keyed on <c>externalRef</c>. Submitting the same ref twice returns 409.
             
-             **Flow:**
-             1. Redis SET NX check (fast duplicate gate)
-             2. PostgreSQL upsert with `ON CONFLICT DO NOTHING` (safety net)
-             3. If new + completed → recompute `AccountSummary` (derived record)
-             4. Return transaction + latest account summary
+             **Pending guard:** If the account already has a pending transaction, the request is
+             rejected with 409 until the first one completes or fails.
+            
+             **Completed transactions:** The Redis idempotency key is deleted on completion so the
+             slot is freed immediately rather than waiting for the 30-day TTL.
             
              **Sample request:**
              ```json
              {
                "externalRef": "txn_abc123",
-               "accountId": "acc_001",
-               "amount": 250.00,
-               "currency": "USD",
-               "type": "credit",
-               "status": "completed",
-               "transactedAt": "2026-05-25T10:00:00Z"
+               "accountId":   "acc_001",
+               "amount":      250.00,
+               "currency":    "USD",
+               "type":        "credit",
+               "status":      "completed",
+               "transactedAt":"2026-05-25T10:00:00Z"
              }
              ```
              </remarks>
              <param name="dto">Transaction payload from the provider.</param>
-             <response code="201">Transaction accepted and stored. Account summary updated.</response>
-             <response code="200">Duplicate — transaction already exists. Original record returned.</response>
-             <response code="400">Validation failed (missing fields, bad currency code, invalid type/status).</response>
+             <response code="201">Transaction accepted and stored.</response>
+             <response code="400">Validation failed.</response>
+             <response code="409">Duplicate transaction, or account has a pending transaction in flight.</response>
+        </member>
+        <member name="T:WebhooksAPI.Data.DTO.ErrorResponse">
+            <summary>Standard error envelope returned on 4xx responses.</summary>
+        </member>
+        <member name="M:WebhooksAPI.Data.DTO.ErrorResponse.#ctor(System.String,System.String)">
+            <summary>Standard error envelope returned on 4xx responses.</summary>
         </member>
         <member name="P:WebhooksAPI.Data.DTO.InboundTransactionDto.Metadata">
             <summary>Arbitrary provider metadata — serialised to JSON for storage.</summary>
+        </member>
+        <member name="T:WebhooksAPI.Data.DTO.ProcessResult">
+            <summary>
+            Discriminated result returned by the service layer.
+            The controller maps each case to the appropriate HTTP response.
+            </summary>
+        </member>
+        <member name="T:WebhooksAPI.Data.DTO.ProcessResult.Accepted">
+            <summary>New transaction accepted and stored.</summary>
+        </member>
+        <member name="M:WebhooksAPI.Data.DTO.ProcessResult.Accepted.#ctor(WebhooksAPI.Data.DTO.TransactionResponse)">
+            <summary>New transaction accepted and stored.</summary>
+        </member>
+        <member name="T:WebhooksAPI.Data.DTO.ProcessResult.DuplicateRequest">
+            <summary>Exact same ExternalRef already exists — true duplicate.</summary>
+        </member>
+        <member name="M:WebhooksAPI.Data.DTO.ProcessResult.DuplicateRequest.#ctor(System.String)">
+            <summary>Exact same ExternalRef already exists — true duplicate.</summary>
+        </member>
+        <member name="T:WebhooksAPI.Data.DTO.ProcessResult.PendingTransactionExists">
+            <summary>Account already has a pending transaction in flight.</summary>
+        </member>
+        <member name="M:WebhooksAPI.Data.DTO.ProcessResult.PendingTransactionExists.#ctor(System.String,System.Guid)">
+            <summary>Account already has a pending transaction in flight.</summary>
         </member>
         <member name="T:WebhooksAPI.Data.Models.AccountSummary">
             <summary>
@@ -66,8 +95,14 @@
         </member>
         <member name="M:WebhooksAPI.Data.Repositories.ITransactionRepository.UpsertAsync(WebhooksAPI.Data.Models.Transaction)">
             <summary>
-            Inserts the transaction. If external_ref already exists, returns the existing row
-            and sets wasDuplicate = true. Uses ON CONFLICT DO NOTHING for atomicity.
+            Inserts the transaction. If ExternalRef already exists returns the existing row
+            with wasDuplicate = true. Uses ON CONFLICT DO NOTHING for atomicity.
+            </summary>
+        </member>
+        <member name="M:WebhooksAPI.Data.Repositories.ITransactionRepository.GetPendingTransactionAsync(System.String)">
+            <summary>
+            Returns the first pending transaction for the account, or null if none exists.
+            Used to block a second transaction while one is still in flight.
             </summary>
         </member>
         <member name="M:WebhooksAPI.Data.Repositories.ITransactionRepository.RefreshAccountSummaryAsync(System.String)">
@@ -78,23 +113,28 @@
         </member>
         <member name="T:WebhooksAPI.Data.Services.IdempotencyService">
             <summary>
-            Uses Redis SET NX as a fast, distributed idempotency gate.
-            If Redis is unavailable, the call is treated as a cache miss and the
-            DB-level ON CONFLICT DO NOTHING acts as the safety net — no request is lost.
+            Redis SET NX idempotency gate.
+            If Redis is unavailable the call degrades gracefully — the DB ON CONFLICT
+            acts as the safety net so no request is lost or duplicated.
             </summary>
         </member>
         <member name="M:WebhooksAPI.Data.Services.IdempotencyService.#ctor(StackExchange.Redis.IConnectionMultiplexer,Microsoft.Extensions.Logging.ILogger{WebhooksAPI.Data.Services.IdempotencyService})">
             <summary>
-            Uses Redis SET NX as a fast, distributed idempotency gate.
-            If Redis is unavailable, the call is treated as a cache miss and the
-            DB-level ON CONFLICT DO NOTHING acts as the safety net — no request is lost.
+            Redis SET NX idempotency gate.
+            If Redis is unavailable the call degrades gracefully — the DB ON CONFLICT
+            acts as the safety net so no request is lost or duplicated.
             </summary>
         </member>
         <member name="M:WebhooksAPI.Data.Services.IIdempotencyService.TryAcquireAsync(System.String,System.TimeSpan)">
             <summary>
             Attempts to acquire a lock for the given key.
-            Returns true if the lock was acquired (first time seen within TTL).
-            Returns false if the key already exists — duplicate request.
+            Returns true if acquired (first time seen within TTL), false if already exists.
+            </summary>
+        </member>
+        <member name="M:WebhooksAPI.Data.Services.IIdempotencyService.ReleaseAsync(System.String)">
+            <summary>
+            Removes the key — called after a transaction completes successfully
+            so the slot is freed and not held indefinitely.
             </summary>
         </member>
     </members>
