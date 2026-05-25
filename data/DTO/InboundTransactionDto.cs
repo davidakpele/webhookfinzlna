@@ -30,6 +30,5 @@ public class InboundTransactionDto
     [Required]
     public DateTime TransactedAt { get; set; }
 
-    /// <summary>Arbitrary provider metadata — serialised to JSON for storage.</summary>
     public JsonElement? Metadata { get; set; }
 }

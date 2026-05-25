@@ -4,13 +4,12 @@ using WebhooksAPI.Data.DTO;
 using WebhooksAPI.Data.Models;
 using WebhooksAPI.Data.Repositories;
 using WebhooksAPI.Data.Services;
+using Xunit;
 
 namespace WebhooksAPI.Tests;
 
 public class TransactionServiceTests
 {
-    // ── Shared helpers ────────────────────────────────────────────────────────
-
     private static InboundTransactionDto BuildDto(
         string externalRef = "txn_001",
         string accountId   = "acc_001",
@@ -22,43 +21,42 @@ public class TransactionServiceTests
         Currency     = "USD",
         Type         = "credit",
         Status       = status,
-        TransactedAt = DateTime.UtcNow,
-        Metadata     = JsonDocument.Parse("{}").RootElement
+        TransactedAt = DateTime.UtcNow
     };
 
-    private static Transaction BuildSavedTransaction(InboundTransactionDto dto) => new()
+    private static Transaction BuildTransaction(string externalRef, string accountId, string status) => new()
     {
         Id           = Guid.NewGuid(),
-        ExternalRef  = dto.ExternalRef,
-        AccountId    = dto.AccountId,
-        Amount       = dto.Amount,
-        Currency     = dto.Currency,
-        Type         = dto.Type,
-        Status       = dto.Status,
-        TransactedAt = dto.TransactedAt,
+        ExternalRef  = externalRef,
+        AccountId    = accountId,
+        Amount       = 100m,
+        Currency     = "USD",
+        Type         = "credit",
+        Status       = status,
+        TransactedAt = DateTime.UtcNow,
         ReceivedAt   = DateTime.UtcNow
     };
 
-    // ── Test 1: New completed transaction is accepted and summary is refreshed ─
+    private static void Fail(string message) =>
+        throw new Exception($"Test failed: {message}");
 
     [Fact]
-    public async Task ProcessAsync_NewCompletedTransaction_ReturnsAcceptedAndRefreshesSummary()
+    public async Task NewCompletedTransaction_ReturnsAccepted_AndRefreshesSummary()
     {
-        // Arrange
-        var dto         = BuildDto(status: "completed");
-        var savedTxn    = BuildSavedTransaction(dto);
+        var dto     = BuildDto(status: "completed");
+        var savedTxn = BuildTransaction(dto.ExternalRef, dto.AccountId, "completed");
 
         var idempotency = new Mock<IIdempotencyService>();
         idempotency
             .Setup(x => x.TryAcquireAsync(dto.ExternalRef, It.IsAny<TimeSpan>()))
-            .ReturnsAsync(true); // first time seen
+            .ReturnsAsync(true);
 
         var repo = new Mock<ITransactionRepository>();
         repo.Setup(x => x.GetPendingTransactionAsync(dto.AccountId))
-            .ReturnsAsync((Transaction?)null); // no pending transaction
+            .ReturnsAsync((Transaction?)null);
 
         repo.Setup(x => x.UpsertAsync(It.IsAny<Transaction>()))
-            .ReturnsAsync((savedTxn, false)); // inserted, not duplicate
+            .ReturnsAsync((savedTxn, false));
 
         repo.Setup(x => x.GetSummaryAsync(dto.AccountId))
             .ReturnsAsync(new AccountSummary
@@ -72,34 +70,33 @@ public class TransactionServiceTests
 
         var service = new TransactionService(idempotency.Object, repo.Object);
 
-        // Act
         var result = await service.ProcessAsync(dto);
+        if (result is not ProcessResult.Accepted accepted)
+            Fail($"Expected Accepted but got {result.GetType().Name}");
+        else
+        {
+            if (accepted.Transaction.ExternalRef != dto.ExternalRef)
+                Fail($"ExternalRef mismatch: expected {dto.ExternalRef}, got {accepted.Transaction.ExternalRef}");
 
-        // Assert
-        var accepted = Assert.IsType<ProcessResult.Accepted>(result);
-        Assert.Equal(dto.ExternalRef, accepted.Transaction.ExternalRef);
-        Assert.Equal("completed", accepted.Transaction.Status);
-        Assert.Equal(100m, accepted.Transaction.AccountSummary.TotalCredits);
+            if (accepted.Transaction.Status != "completed")
+                Fail($"Status mismatch: expected 'completed', got {accepted.Transaction.Status}");
 
-        // Summary must be refreshed for completed transactions
+            if (accepted.Transaction.AccountSummary.TotalCredits != 100m)
+                Fail($"TotalCredits mismatch: expected 100, got {accepted.Transaction.AccountSummary.TotalCredits}");
+        }
         repo.Verify(x => x.RefreshAccountSummaryAsync(dto.AccountId), Times.Once);
-
-        // Redis key must be shrunk to 2-second TTL after completion
         idempotency.Verify(x => x.MarkCompletedAsync(dto.ExternalRef), Times.Once);
     }
 
-    // ── Test 2: Duplicate ExternalRef is rejected before touching the DB ──────
-
     [Fact]
-    public async Task ProcessAsync_DuplicateExternalRef_ReturnsDuplicateRequestWithoutHittingDb()
+    public async Task DuplicateExternalRef_ReturnsDuplicateResult_DbNeverCalled()
     {
-        // Arrange
         var dto = BuildDto();
 
         var idempotency = new Mock<IIdempotencyService>();
         idempotency
             .Setup(x => x.TryAcquireAsync(dto.ExternalRef, It.IsAny<TimeSpan>()))
-            .ReturnsAsync(false); // key already exists in Redis
+            .ReturnsAsync(false);
 
         var repo = new Mock<ITransactionRepository>();
 
@@ -107,48 +104,46 @@ public class TransactionServiceTests
 
         // Act
         var result = await service.ProcessAsync(dto);
+        if (result is not ProcessResult.DuplicateRequest duplicate)
+            Fail($"Expected DuplicateRequest but got {result.GetType().Name}");
+        else if (duplicate.ExternalRef != dto.ExternalRef)
+            Fail($"ExternalRef mismatch: expected {dto.ExternalRef}, got {duplicate.ExternalRef}");
 
-        // Assert
-        var duplicate = Assert.IsType<ProcessResult.DuplicateRequest>(result);
-        Assert.Equal(dto.ExternalRef, duplicate.ExternalRef);
-
-        // DB must never be touched — Redis gate stopped it
         repo.Verify(x => x.UpsertAsync(It.IsAny<Transaction>()), Times.Never);
         repo.Verify(x => x.GetPendingTransactionAsync(It.IsAny<string>()), Times.Never);
     }
 
-    // ── Test 3: Second transaction blocked while account has a pending one ─────
-
     [Fact]
-    public async Task ProcessAsync_AccountHasPendingTransaction_ReturnsPendingTransactionExists()
+    public async Task AccountHasPendingTransaction_BlocksNewRequest_ReleasesRedisKey()
     {
-        // Arrange
         var dto        = BuildDto(externalRef: "txn_002", status: "pending");
-        var pendingTxn = BuildSavedTransaction(BuildDto(externalRef: "txn_001", status: "pending"));
+        var pendingTxn = BuildTransaction("txn_001", dto.AccountId, "pending");
 
         var idempotency = new Mock<IIdempotencyService>();
         idempotency
             .Setup(x => x.TryAcquireAsync(dto.ExternalRef, It.IsAny<TimeSpan>()))
-            .ReturnsAsync(true); // new ExternalRef, passes Redis gate
+            .ReturnsAsync(true);
 
         var repo = new Mock<ITransactionRepository>();
         repo.Setup(x => x.GetPendingTransactionAsync(dto.AccountId))
-            .ReturnsAsync(pendingTxn); // account already has a pending transaction
-
+            .ReturnsAsync(pendingTxn); 
         var service = new TransactionService(idempotency.Object, repo.Object);
 
         // Act
         var result = await service.ProcessAsync(dto);
+        if (result is not ProcessResult.PendingTransactionExists blocked)
+            Fail($"Expected PendingTransactionExists but got {result.GetType().Name}");
+        else
+        {
+            if (blocked.AccountId != dto.AccountId)
+                Fail($"AccountId mismatch: expected {dto.AccountId}, got {blocked.AccountId}");
 
-        // Assert
-        var blocked = Assert.IsType<ProcessResult.PendingTransactionExists>(result);
-        Assert.Equal(dto.AccountId, blocked.AccountId);
-        Assert.Equal(pendingTxn.Id, blocked.PendingTransactionId);
+            if (blocked.PendingTransactionId != pendingTxn.Id)
+                Fail($"PendingTransactionId mismatch: expected {pendingTxn.Id}, got {blocked.PendingTransactionId}");
+        }
 
-        // Redis key must be released — we didn't store anything
         idempotency.Verify(x => x.ReleaseAsync(dto.ExternalRef), Times.Once);
 
-        // DB insert must never happen
         repo.Verify(x => x.UpsertAsync(It.IsAny<Transaction>()), Times.Never);
     }
 }

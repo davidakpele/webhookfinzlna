@@ -30,7 +30,6 @@ public class TransactionRepository(IConfiguration config) : ITransactionReposito
         if (inserted is not null)
             return (inserted, false);
 
-        // Duplicate — return the existing row
         var existing = await conn.QuerySingleAsync<Transaction>(
             """SELECT * FROM transactions WHERE "ExternalRef" = @ExternalRef""",
             new { txn.ExternalRef });

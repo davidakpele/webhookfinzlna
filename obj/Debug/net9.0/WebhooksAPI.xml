@@ -112,29 +112,43 @@
             </summary>
         </member>
         <member name="T:WebhooksAPI.Data.Services.IdempotencyService">
-            <summary>
-            Redis SET NX idempotency gate.
-            If Redis is unavailable the call degrades gracefully — the DB ON CONFLICT
-            acts as the safety net so no request is lost or duplicated.
-            </summary>
+             <summary>
+             Redis-backed idempotency gate with status-aware TTLs:
+               - pending   → 30 minutes  (covers realistic processing windows)
+               - completed → 2 seconds   (blocks immediate retries; DB unique constraint handles the rest)
+            
+             If Redis is unavailable the service degrades gracefully — the PostgreSQL
+             ON CONFLICT DO NOTHING upsert acts as the permanent safety net.
+             </summary>
         </member>
         <member name="M:WebhooksAPI.Data.Services.IdempotencyService.#ctor(StackExchange.Redis.IConnectionMultiplexer,Microsoft.Extensions.Logging.ILogger{WebhooksAPI.Data.Services.IdempotencyService})">
-            <summary>
-            Redis SET NX idempotency gate.
-            If Redis is unavailable the call degrades gracefully — the DB ON CONFLICT
-            acts as the safety net so no request is lost or duplicated.
-            </summary>
+             <summary>
+             Redis-backed idempotency gate with status-aware TTLs:
+               - pending   → 30 minutes  (covers realistic processing windows)
+               - completed → 2 seconds   (blocks immediate retries; DB unique constraint handles the rest)
+            
+             If Redis is unavailable the service degrades gracefully — the PostgreSQL
+             ON CONFLICT DO NOTHING upsert acts as the permanent safety net.
+             </summary>
         </member>
         <member name="M:WebhooksAPI.Data.Services.IIdempotencyService.TryAcquireAsync(System.String,System.TimeSpan)">
             <summary>
-            Attempts to acquire a lock for the given key.
-            Returns true if acquired (first time seen within TTL), false if already exists.
+            Attempts to acquire a lock for the given key with the specified TTL.
+            Returns true if acquired (first time seen), false if the key already exists.
+            </summary>
+        </member>
+        <member name="M:WebhooksAPI.Data.Services.IIdempotencyService.MarkCompletedAsync(System.String)">
+            <summary>
+            Sets the key with a very short TTL (2 seconds) to signal completion.
+            The key expires almost immediately, freeing the slot, but any retry
+            within that window is still blocked. After expiry the DB unique constraint
+            on ExternalRef permanently prevents re-use.
             </summary>
         </member>
         <member name="M:WebhooksAPI.Data.Services.IIdempotencyService.ReleaseAsync(System.String)">
             <summary>
-            Removes the key — called after a transaction completes successfully
-            so the slot is freed and not held indefinitely.
+            Deletes the key immediately — used when a pending transaction is rejected
+            so the slot is not held unnecessarily.
             </summary>
         </member>
     </members>
