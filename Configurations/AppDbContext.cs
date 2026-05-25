@@ -1,110 +1,54 @@
-using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
-using WebhooksAPI.data.Models;
+using WebhooksAPI.Data.Models;
 
-namespace WebhooksAPI.Configurations
+namespace WebhooksAPI.Configurations;
+
+public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
-    public class AppDbContext : DbContext
+    public DbSet<Transaction> Transactions => Set<Transaction>();
+    public DbSet<AccountSummary> AccountSummaries => Set<AccountSummary>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        public AppDbContext(DbContextOptions<AppDbContext> options)
-            : base(options) { }
+        base.OnModelCreating(modelBuilder);
 
-        public DbSet<Transaction> Transactions { get; set; }
-        public DbSet<AccountSummary> AccountSummary { get; set; }
+        // Ensure all DateTime values are stored/read as UTC
+        var utcConverter = new ValueConverter<DateTime, DateTime>(
+            v => v.Kind == DateTimeKind.Utc ? v : DateTime.SpecifyKind(v, DateTimeKind.Utc),
+            v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
 
-        protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+        modelBuilder.Entity<Transaction>(e =>
         {
-            optionsBuilder.ConfigureWarnings(w =>
-                w.Ignore(RelationalEventId.PendingModelChangesWarning));
-        }
+            e.ToTable("transactions");
+            e.HasKey(t => t.Id);
 
-        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            e.HasIndex(t => t.ExternalRef)
+             .IsUnique()
+             .HasDatabaseName("idx_transactions_external_ref");
+
+            e.HasIndex(t => t.AccountId)
+             .HasDatabaseName("idx_transactions_account_id");
+
+            e.Property(t => t.Amount).HasPrecision(18, 2);
+            e.Property(t => t.Currency).HasMaxLength(3);
+            e.Property(t => t.Type).HasMaxLength(20);
+            e.Property(t => t.Status).HasMaxLength(20);
+            e.Property(t => t.TransactedAt).HasConversion(utcConverter);
+            e.Property(t => t.ReceivedAt).HasConversion(utcConverter);
+        });
+
+        modelBuilder.Entity<AccountSummary>(e =>
         {
-            base.OnModelCreating(modelBuilder);
+            e.ToTable("account_summaries");
+            e.HasKey(a => a.AccountId);
 
-            var utcConverter = new ValueConverter<DateTime, DateTime>(
-                v => v.Kind == DateTimeKind.Utc ? v : DateTime.SpecifyKind(v, DateTimeKind.Utc),
-                v => DateTime.SpecifyKind(v, DateTimeKind.Utc)
-            );
+            e.Property(a => a.TotalCredits).HasPrecision(18, 2);
+            e.Property(a => a.TotalDebits).HasPrecision(18, 2);
+            e.Property(a => a.LastUpdated).HasConversion(utcConverter);
 
-            var utcNullableConverter = new ValueConverter<DateTime?, DateTime?>(
-                v => v.HasValue ? (v.Value.Kind == DateTimeKind.Utc ? v : DateTime.SpecifyKind(v.Value, DateTimeKind.Utc)) : v,
-                v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : v
-            );
-
-            foreach (var entityType in modelBuilder.Model.GetEntityTypes())
-            {
-                foreach (var property in entityType.GetProperties())
-                {
-                    if (property.ClrType == typeof(DateTime))
-                        property.SetValueConverter(utcConverter);
-
-                    if (property.ClrType == typeof(DateTime?))
-                        property.SetValueConverter(utcNullableConverter);
-                }
-            }
-
-            modelBuilder.Entity<Transaction>(entity =>
-            {
-                entity.ToTable("transactions");
-                entity.HasKey(t => t.Id);
-                
-                entity.HasIndex(t => t.ExternalRef)
-                    .IsUnique()
-                    .HasDatabaseName("idx_transactions_external_ref");
-
-                entity.HasIndex(t => t.AccountId)
-                    .HasDatabaseName("idx_transactions_account_id");
-
-                entity.Property(t => t.Amount)
-                    .HasPrecision(18, 2);
-
-                entity.Property(t => t.Currency)
-                    .HasMaxLength(3);
-
-                entity.Property(t => t.Type)
-                    .HasMaxLength(20);
-
-                entity.Property(t => t.Status)
-                    .HasMaxLength(20);
-            });
-
-            modelBuilder.Entity<AccountSummary>(entity =>
-            {
-                entity.ToTable("account_summaries");
-                entity.HasKey(a => a.AccountId);
-
-                entity.Property(a => a.TotalCredits)
-                    .HasPrecision(18, 2);
-
-                entity.Property(a => a.TotalDebits)
-                    .HasPrecision(18, 2);
-
-                entity.Ignore(a => a.RunningBalance);
-            });
-        }
-
-        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
-        {
-            var entries = ChangeTracker.Entries()
-                .Where(e => e.State == EntityState.Added || e.State == EntityState.Modified);
-
-            foreach (var entry in entries)
-            {
-                if (entry.Properties.Any(p => p.Metadata.Name == "UpdatedOn"))
-                    entry.Property("UpdatedOn").CurrentValue = DateTime.UtcNow;
-
-                if (entry.State == EntityState.Added &&
-                    entry.Properties.Any(p => p.Metadata.Name == "CreatedOn"))
-                    entry.Property("CreatedOn").CurrentValue = DateTime.UtcNow;
-            }
-
-            return base.SaveChangesAsync(cancellationToken);
-        }
+            // Computed in-memory — not a DB column
+            e.Ignore(a => a.RunningBalance);
+        });
     }
 }

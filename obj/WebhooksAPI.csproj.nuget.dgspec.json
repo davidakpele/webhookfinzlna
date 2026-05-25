@@ -50,63 +50,35 @@
         "net9.0": {
           "targetAlias": "net9.0",
           "dependencies": {
-            "FluentValidation": {
+            "Dapper": {
               "target": "Package",
-              "version": "[12.1.1, )"
+              "version": "[2.1.35, )"
             },
-            "FluentValidation.AspNetCore": {
+            "Microsoft.AspNetCore.OpenApi": {
               "target": "Package",
-              "version": "[11.3.1, )"
-            },
-            "Microsoft.AspNetCore.Authentication.JwtBearer": {
-              "target": "Package",
-              "version": "[9.0.10, )"
-            },
-            "Microsoft.AspNetCore.Identity.EntityFrameworkCore": {
-              "target": "Package",
-              "version": "[9.0.12, )"
+              "version": "[9.0.5, )"
             },
             "Microsoft.EntityFrameworkCore.Design": {
               "include": "Runtime, Build, Native, ContentFiles, Analyzers, BuildTransitive",
               "suppressParent": "All",
               "target": "Package",
-              "version": "[9.0.12, )"
+              "version": "[9.0.5, )"
             },
-            "Microsoft.Extensions.Caching.StackExchangeRedis": {
+            "Npgsql": {
               "target": "Package",
-              "version": "[10.0.3, )"
-            },
-            "Microsoft.IdentityModel.JsonWebTokens": {
-              "target": "Package",
-              "version": "[8.15.0, )"
-            },
-            "Microsoft.IdentityModel.Tokens": {
-              "target": "Package",
-              "version": "[8.15.0, )"
-            },
-            "Microsoft.VisualStudio.Azure.Containers.Tools.Targets": {
-              "target": "Package",
-              "version": "[1.22.1, )"
+              "version": "[9.0.3, )"
             },
             "Npgsql.EntityFrameworkCore.PostgreSQL": {
               "target": "Package",
               "version": "[9.0.4, )"
             },
-            "Scalar.AspNetCore": {
-              "target": "Package",
-              "version": "[2.12.18, )"
-            },
             "StackExchange.Redis": {
               "target": "Package",
-              "version": "[2.11.3, )"
+              "version": "[2.8.16, )"
             },
             "Swashbuckle.AspNetCore": {
               "target": "Package",
-              "version": "[10.1.4, )"
-            },
-            "System.IdentityModel.Tokens.Jwt": {
-              "target": "Package",
-              "version": "[8.15.0, )"
+              "version": "[6.9.0, )"
             }
           },
           "imports": [
