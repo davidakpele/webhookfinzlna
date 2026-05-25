@@ -6,6 +6,7 @@ C:\Users\akpel\Desktop\WebhooksAPI\bin\Debug\net9.0\WebhooksAPI.deps.json
 C:\Users\akpel\Desktop\WebhooksAPI\bin\Debug\net9.0\WebhooksAPI.runtimeconfig.json
 C:\Users\akpel\Desktop\WebhooksAPI\bin\Debug\net9.0\WebhooksAPI.dll
 C:\Users\akpel\Desktop\WebhooksAPI\bin\Debug\net9.0\WebhooksAPI.pdb
+C:\Users\akpel\Desktop\WebhooksAPI\bin\Debug\net9.0\WebhooksAPI.xml
 C:\Users\akpel\Desktop\WebhooksAPI\bin\Debug\net9.0\Dapper.dll
 C:\Users\akpel\Desktop\WebhooksAPI\bin\Debug\net9.0\Humanizer.dll
 C:\Users\akpel\Desktop\WebhooksAPI\bin\Debug\net9.0\Microsoft.AspNetCore.OpenApi.dll
@@ -132,6 +133,7 @@ C:\Users\akpel\Desktop\WebhooksAPI\obj\Debug\net9.0\swae.build.ex.cache
 C:\Users\akpel\Desktop\WebhooksAPI\obj\Debug\net9.0\Webhooks.EA48E667.Up2Date
 C:\Users\akpel\Desktop\WebhooksAPI\obj\Debug\net9.0\WebhooksAPI.dll
 C:\Users\akpel\Desktop\WebhooksAPI\obj\Debug\net9.0\refint\WebhooksAPI.dll
+C:\Users\akpel\Desktop\WebhooksAPI\obj\Debug\net9.0\WebhooksAPI.xml
 C:\Users\akpel\Desktop\WebhooksAPI\obj\Debug\net9.0\WebhooksAPI.pdb
 C:\Users\akpel\Desktop\WebhooksAPI\obj\Debug\net9.0\WebhooksAPI.genruntimeconfig.cache
 C:\Users\akpel\Desktop\WebhooksAPI\obj\Debug\net9.0\ref\WebhooksAPI.dll
