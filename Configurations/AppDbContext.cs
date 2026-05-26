@@ -21,8 +21,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             e.ToTable("transactions");
             e.HasKey(t => t.Id);
-
-            // Explicit column names — Dapper SQL must match these exactly
             e.Property(t => t.Id).HasColumnName("Id");
             e.Property(t => t.ExternalRef).HasColumnName("ExternalRef");
             e.Property(t => t.AccountId).HasColumnName("AccountId");
